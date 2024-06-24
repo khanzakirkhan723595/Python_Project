@@ -1,0 +1,958 @@
+import pygame as PG
+import sys
+from collections import deque
+import math
+import os
+from random import randint, random,choices, randrange
+
+# game settings
+RES = WIDTH, HEIGHT = 1600, 900
+# RES = WIDTH, HEIGHT = 1920, 1080
+HALF_WIDTH = WIDTH // 2
+HALF_HEIGHT = HEIGHT // 2
+FPS = 0
+
+PLAYER_POS = 1.5, 5  # mini_map
+PLAYER_ANGLE = 0
+PLAYER_SPEED = 0.004
+PLAYER_ROT_SPEED = 0.002
+PLAYER_SIZE_SCALE = 60
+PLAYER_MAX_HEALTH = 100
+
+MOUSE_SENSITIVITY = 0.0003
+MOUSE_MAX_REL = 40
+MOUSE_BORDER_LEFT = 100
+MOUSE_BORDER_RIGHT = WIDTH - MOUSE_BORDER_LEFT
+
+FLOOR_COLOR = (30, 30, 30)
+
+FOV = math.pi / 3
+HALF_FOV = FOV / 2
+NUM_RAYS = WIDTH // 2
+HALF_NUM_RAYS = NUM_RAYS // 2
+DELTA_ANGLE = FOV / NUM_RAYS
+MAX_DEPTH = 20
+
+SCREEN_DIST = HALF_WIDTH / math.tan(HALF_FOV)
+SCALE = WIDTH // NUM_RAYS
+
+TEXTURE_SIZE = 256
+HALF_TEXTURE_SIZE = TEXTURE_SIZE // 2
+
+
+class Game:
+    def __init__(shoot):
+        PG.init()
+        shoot.screen = PG.display.set_mode(RES) # gives the screen a resolution
+        shoot.clock = PG.time.Clock() # sets time
+        shoot.delta_time = 1 # sets time difference to 1 second
+        shoot.global_trigger = False # initially trigger is set false
+        shoot.global_event = PG.USEREVENT + 0
+        PG.time.set_timer(shoot.global_event, 40)
+        shoot.start_screen = StartScreen(shoot)  # makes an instance of the StartScreen
+        shoot.new_game() #game starts
+
+    def new_game(shoot):
+        shoot.map = Map(shoot)
+        shoot.player = Player(shoot)
+        shoot.object_renderer = ObjectRenderer(shoot)
+        shoot.raycasting = RayCasting(shoot)
+        shoot.object_handler = ObjectHandler(shoot)
+        shoot.gun = Weapon(shoot)
+        shoot.sound = Sound(shoot)
+        shoot.pathfinding = PathFinding(shoot)
+        PG.mixer.music.play(-1)
+        PG.mouse.set_visible(False)
+    def update(shoot):
+        if shoot.start_screen.active:  # Only update the start screen if it's active
+            shoot.start_screen.update()
+        else:
+            shoot.player.update()
+            shoot.raycasting.update()
+            shoot.object_handler.update()
+            shoot.gun.update()
+        PG.display.flip()
+        shoot.delta_time = shoot.clock.tick(FPS)
+        PG.display.set_caption(f'{shoot.clock.get_fps() :.1f}')
+
+    def draw(shoot):
+        if shoot.start_screen.active:  # Only draw the start screen if it's active
+            shoot.start_screen.draw()
+        else:
+            # shoot.screen.fill('black')
+            shoot.object_renderer.draw()
+            shoot.gun.draw()
+            # shoot.map.draw()
+            # shoot.player.draw()
+
+    def check_events(shoot):
+        shoot.global_trigger = False
+        for event in PG.event.get():
+            if event.type == PG.QUIT or (event.type == PG.KEYDOWN and event.key == PG.K_ESCAPE):
+                PG.quit()
+                sys.exit()
+            elif event.type == shoot.global_event:
+                shoot.global_trigger = True
+            shoot.player.single_fire_event(event)
+            if shoot.start_screen.active:  # Check events for the start screen buttons if it's active
+                shoot.start_screen.check_events(event)
+
+    def run(shoot):
+        while True:
+            shoot.check_events()
+            shoot.update()
+            shoot.draw()
+
+
+
+_ = False
+mini_map = [
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 1],
+    [1, _, _, _, 4, 4, 3, _, _, _, 2, 2, 2, _, _, 1],
+    [1, _, _, _, _, _, 3, _, _, _, _, _, 2, _, _, 1],
+    [1, _, _, _, _, _, 3, _, _, _, _, _, 2, _, _, 1],
+    [1, _, _, _, _, _, 3, 4, 4, _, _, _, _, _, _, 1],
+    [1, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 1],
+    [1, _, _, _, 4, _, _, _, _, _, _, _, _, _, _, 1],
+    [1, 5, 5, 3, 5, 3, 5, 2, _, _, _, _, 3, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, _, _, _, _, 3, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, _, _, _, _, 3, 1, 1, 1],
+    [1, 2, 3, 5, 1, 5, 1, 5, _, _, _, _, 3, 5, 5, 1],
+    [1, 4, _, _, _, _, _, _, _, _, _, _, _, _, _, 1],
+    [3, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 1],
+    [1, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 1],
+    [1, _, _, 2, _, _, _, _, _, 3, 4, _, 4, 3, _, 1],
+    [1, _, _, 5, _, _, _, _, _, _, 3, _, 3, _, _, 1],
+    [1, _, _, 2, _, _, _, _, _, _, _, _, _, _, _, 1],
+    [1, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 1],
+    [3, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 1],
+    [1, 4, _, _, _, _, _, _, 4, _, _, 4, _, 5, _, 1],
+    [1, 1, 3, 3, _, _, _, 3, 1, 3, 3, 1, 3, 1, 1, 1],
+    [1, 1, 1, 3, _, _, _, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 3, 3, 4, _, _, _, 3, 3, 3, 3, 3, 3, 3, 3, 1],
+    [3, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 3],
+    [3, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 3],
+    [3, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 3],
+    [3, _, _, 5, _, _, 4, 5, _, _, _, 5, 2, 1, _, 3],
+    [3, _, _, 5, _, _, 4, 3, _, _, _, 4, 3, 1, _, 3],
+    [3, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 3],
+    [3, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 3],
+    [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+]
+class StartScreen:
+    def __init__(shoot, game):
+        shoot.game = game
+        shoot.active = True
+
+        # Load the background image
+        shoot.background_image = PG.image.load('resources/textures/bg.png')
+
+        # Button properties
+        width_bt = 200
+        height_bt = 50
+        x_bt = (RES[0] - width_bt) // 2
+        y_bt = (RES[1] - height_bt) // 2
+        shoot.start_button = PG.Rect(x_bt, y_bt, width_bt, height_bt)
+
+        # Text properties
+        shoot.font = PG.font.Font(None, 36)
+        shoot.text_color = (0, 0, 0)
+        shoot.text = shoot.font.render("Start Game", True, shoot.text_color)
+        shoot.text_rect = shoot.text.get_rect(center=shoot.start_button.center)
+
+    def update(shoot):
+        pass
+
+    def draw(shoot):
+        scaled_pic = PG.transform.scale(shoot.background_image, shoot.game.screen.get_size())
+        shoot.game.screen.blit(scaled_pic, (0, 0))   # Draw the background image
+        PG.draw.rect(shoot.game.screen, (255, 255, 255), shoot.start_button)  # Draw the start button
+        shoot.game.screen.blit(shoot.text, shoot.text_rect)  # Draw the text on the button
+
+    def check_events(shoot, event):
+        if event.type == PG.MOUSEBUTTONDOWN:
+            if event.button == 1:  # Left mouse button clicked
+                if shoot.start_button.collidepoint(event.pos):  # Check if the start button was clicked
+                    shoot.active = False  # Deactivate the start screen
+                    shoot.game.new_game()  # Start the game
+
+        if event.type == PG.MOUSEMOTION:
+            PG.mouse.set_visible(True)  # Keep the mouse cursor visible
+class ObjectHandler:
+    def __init__(shoot, game):
+        shoot.game = game
+        shoot.sprite_list = []
+        shoot.npc_list = []
+        shoot.npc_sprite_path = 'resources/sprites/npc/'
+        shoot.static_sprite_path = 'resources/sprites/static_sprites/'
+        shoot.anim_sprite_path = 'resources/sprites/animated_sprites/'
+        add_sprite = shoot.add_sprite
+        add_npc = shoot.add_npc
+        shoot.npc_positions = {}
+
+        # spawn npc
+        shoot.foes = 10  # npc count = enemies
+        shoot.npc_types = [SoldierNPC, CacoDemonNPC, CyberDemonNPC]
+        shoot.weights = [70, 20, 10]
+        shoot.restricted_area = {(i, j) for i in range(10) for j in range(10)}
+        shoot.spawn_npc()
+
+        # sprite map
+        add_sprite(AnimatedSprite(game))
+        add_sprite(AnimatedSprite(game, pos=(1.5, 1.5)))
+        add_sprite(AnimatedSprite(game, pos=(1.5, 7.5)))
+        add_sprite(AnimatedSprite(game, pos=(5.5, 3.25)))
+        add_sprite(AnimatedSprite(game, pos=(5.5, 4.75)))
+        add_sprite(AnimatedSprite(game, pos=(7.5, 2.5)))
+        add_sprite(AnimatedSprite(game, pos=(7.5, 5.5)))
+        add_sprite(AnimatedSprite(game, pos=(14.5, 1.5)))
+        add_sprite(AnimatedSprite(game, pos=(14.5, 4.5)))
+        add_sprite(AnimatedSprite(game, path=shoot.anim_sprite_path + 'red_light/0.png', pos=(14.5, 5.5)))
+        add_sprite(AnimatedSprite(game, path=shoot.anim_sprite_path + 'red_light/0.png', pos=(14.5, 7.5)))
+        add_sprite(AnimatedSprite(game, path=shoot.anim_sprite_path + 'red_light/0.png', pos=(12.5, 7.5)))
+        add_sprite(AnimatedSprite(game, path=shoot.anim_sprite_path + 'red_light/0.png', pos=(9.5, 7.5)))
+        add_sprite(AnimatedSprite(game, path=shoot.anim_sprite_path + 'red_light/0.png', pos=(14.5, 12.5)))
+        add_sprite(AnimatedSprite(game, path=shoot.anim_sprite_path + 'red_light/0.png', pos=(9.5, 20.5)))
+        add_sprite(AnimatedSprite(game, path=shoot.anim_sprite_path + 'red_light/0.png', pos=(10.5, 20.5)))
+        add_sprite(AnimatedSprite(game, path=shoot.anim_sprite_path + 'red_light/0.png', pos=(3.5, 14.5)))
+        add_sprite(AnimatedSprite(game, path=shoot.anim_sprite_path + 'red_light/0.png', pos=(3.5, 18.5)))
+        add_sprite(AnimatedSprite(game, pos=(14.5, 24.5)))
+        add_sprite(AnimatedSprite(game, pos=(14.5, 30.5)))
+        add_sprite(AnimatedSprite(game, pos=(1.5, 30.5)))
+        add_sprite(AnimatedSprite(game, pos=(1.5, 24.5)))
+
+        # npc map
+        # add_npc(SoldierNPC(game, pos=(11.0, 19.0)))
+        # add_npc(SoldierNPC(game, pos=(11.5, 4.5)))
+        # add_npc(SoldierNPC(game, pos=(13.5, 6.5)))
+        # add_npc(SoldierNPC(game, pos=(2.0, 20.0)))
+        # add_npc(SoldierNPC(game, pos=(4.0, 29.0)))
+        # add_npc(CacoDemonNPC(game, pos=(5.5, 14.5)))
+        # add_npc(CacoDemonNPC(game, pos=(5.5, 16.5)))
+        # add_npc(CyberDemonNPC(game, pos=(14.5, 25.5)))
+
+    def spawn_npc(shoot):
+        for i in range(shoot.foes):
+                npc = choices(shoot.npc_types, shoot.weights)[0]
+                pos = x, y = randrange(shoot.game.map.cols), randrange(shoot.game.map.rows)
+                while (pos in shoot.game.map.world_map) or (pos in shoot.restricted_area):
+                    pos = x, y = randrange(shoot.game.map.cols), randrange(shoot.game.map.rows)
+                shoot.add_npc(npc(shoot.game, pos=(x + 0.5, y + 0.5)))
+
+    def check_win(shoot):
+        if not len(shoot.npc_positions):
+            shoot.game.object_renderer.win()
+            PG.display.flip()
+            PG.time.delay(1500)
+            shoot.game.new_game()
+
+    def update(shoot):
+        shoot.npc_positions = {npc.map_pos for npc in shoot.npc_list if npc.alive}
+        [sprite.update() for sprite in shoot.sprite_list]
+        [npc.update() for npc in shoot.npc_list]
+        shoot.check_win()
+
+    def add_npc(shoot, npc):
+        shoot.npc_list.append(npc)
+
+    def add_sprite(shoot, sprite):
+        shoot.sprite_list.append(sprite)
+
+class ObjectRenderer:
+    def __init__(shoot, game):
+        shoot.game = game
+        shoot.screen = game.screen
+        shoot.wall_textures = shoot.load_wall_textures()
+        shoot.sky_image = shoot.get_texture('resources/textures/sky.png', (WIDTH, HALF_HEIGHT))
+        shoot.sky_offset = 0
+        shoot.blood_screen = shoot.get_texture('resources/textures/blood_screen.png', RES)
+        shoot.digit_size = 90
+        shoot.digit_images = [shoot.get_texture(f'resources/textures/digits/{i}.png', [shoot.digit_size] * 2)
+                             for i in range(11)]
+        shoot.digits = dict(zip(map(str, range(11)), shoot.digit_images))
+        shoot.game_over_pic = shoot.get_texture('resources/textures/game_over.png', RES)
+        shoot.win_pic = shoot.get_texture('resources/textures/win.png', RES)
+
+    def draw(shoot):
+        shoot.draw_background()
+        shoot.render_game_objects()
+        shoot.draw_player_health()
+
+    def win(shoot):
+        shoot.screen.blit(shoot.win_pic, (0, 0))
+
+    def game_over(shoot):
+        shoot.screen.blit(shoot.game_over_pic, (0, 0))
+
+    def draw_player_health(shoot):
+        health = str(shoot.game.player.health)
+        for i, char in enumerate(health):
+            shoot.screen.blit(shoot.digits[char], (i * shoot.digit_size, 0))
+        shoot.screen.blit(shoot.digits['10'], ((i + 1) * shoot.digit_size, 0))
+
+    def player_damage(shoot):
+        shoot.screen.blit(shoot.blood_screen, (0, 0))
+
+    def draw_background(shoot):
+        shoot.sky_offset = (shoot.sky_offset + 4.5 * shoot.game.player.rel) % WIDTH
+        shoot.screen.blit(shoot.sky_image, (-shoot.sky_offset, 0))
+        shoot.screen.blit(shoot.sky_image, (-shoot.sky_offset + WIDTH, 0))
+        # floor
+        PG.draw.rect(shoot.screen, FLOOR_COLOR, (0, HALF_HEIGHT, WIDTH, HEIGHT))
+
+    def render_game_objects(shoot):
+        list_objects = sorted(shoot.game.raycasting.objects_to_render, key=lambda t: t[0], reverse=True)
+        for depth, image, pos in list_objects:
+            shoot.screen.blit(image, pos)
+
+    @staticmethod
+    def get_texture(path, res=(TEXTURE_SIZE, TEXTURE_SIZE)):
+        texture = PG.image.load(path).convert_alpha()
+        return PG.transform.scale(texture, res)
+
+    def load_wall_textures(shoot):
+        return {
+            1: shoot.get_texture('resources/textures/1.png'),
+            2: shoot.get_texture('resources/textures/2.png'),
+            3: shoot.get_texture('resources/textures/3.png'),
+            4: shoot.get_texture('resources/textures/4.png'),
+            5: shoot.get_texture('resources/textures/5.png'),
+        }
+
+class Player:
+    def __init__(shoot, game):
+        shoot.game = game
+        shoot.x, shoot.y = PLAYER_POS
+        shoot.angle = PLAYER_ANGLE
+        shoot.shot = False
+        shoot.health = PLAYER_MAX_HEALTH
+        shoot.rel = 0
+        shoot.health_recovery_delay = 700
+        shoot.time_prev = PG.time.get_ticks()
+
+    def recover_health(shoot):
+        if shoot.check_health_recovery_delay() and shoot.health < PLAYER_MAX_HEALTH:
+            shoot.health += 1
+
+    def check_health_recovery_delay(shoot):
+        time_now = PG.time.get_ticks()
+        if time_now - shoot.time_prev > shoot.health_recovery_delay:
+            shoot.time_prev = time_now
+            return True
+
+    def check_game_over(shoot):
+        if shoot.health < 1:
+            shoot.game.object_renderer.game_over()
+            PG.display.flip()
+            PG.time.delay(1500)
+            shoot.game.new_game()
+
+    def get_damage(shoot, damage):
+        shoot.health -= damage
+        shoot.game.object_renderer.player_damage()
+        shoot.game.sound.player_pain.play()
+        shoot.check_game_over()
+
+    def single_fire_event(shoot, event):
+        if event.type == PG.MOUSEBUTTONDOWN:
+            if event.button == 1 and not shoot.shot and not shoot.game.gun.reloading:
+                shoot.game.sound.shotgun.play()
+                shoot.shot = True
+                shoot.game.gun.reloading = True
+
+    def movement(shoot):
+        sin_angle = math.sin(shoot.angle)
+        cos_angle = math.cos(shoot.angle)
+        dx, dy = 0, 0
+        speed = PLAYER_SPEED * shoot.game.delta_time
+        speed_sin = speed * sin_angle
+        speed_cos = speed * cos_angle
+
+        keys = PG.key.get_pressed()
+        if keys[PG.K_w]:
+            dx += speed_cos
+            dy += speed_sin
+        if keys[PG.K_s]:
+            dx += -speed_cos
+            dy += -speed_sin
+        if keys[PG.K_a]:
+            dx += speed_sin
+            dy += -speed_cos
+        if keys[PG.K_d]:
+            dx += -speed_sin
+            dy += speed_cos
+
+        shoot.check_wall_collision(dx, dy)
+
+        # if keys[PG.K_LEFT]:
+        #     shoot.angle -= PLAYER_ROT_SPEED * shoot.game.delta_time
+        # if keys[PG.K_RIGHT]:
+        #     shoot.angle += PLAYER_ROT_SPEED * shoot.game.delta_time
+        shoot.angle %= math.tau
+
+    def check_wall(shoot, x, y):
+        return (x, y) not in shoot.game.map.world_map
+
+    def check_wall_collision(shoot, dx, dy):
+        scale = PLAYER_SIZE_SCALE / shoot.game.delta_time
+        if shoot.check_wall(int(shoot.x + dx * scale), int(shoot.y)):
+            shoot.x += dx
+        if shoot.check_wall(int(shoot.x), int(shoot.y + dy * scale)):
+            shoot.y += dy
+
+    def draw(shoot):
+        PG.draw.line(shoot.game.screen, 'yellow', (shoot.x * 100, shoot.y * 100),
+                    (shoot.x * 100 + WIDTH * math.cos(shoot.angle),
+                     shoot.y * 100 + WIDTH * math. sin(shoot.angle)), 2)
+        PG.draw.circle(shoot.game.screen, 'green', (shoot.x * 100, shoot.y * 100), 15)
+
+    def mouse_control(shoot):
+        mx, my = PG.mouse.get_pos()
+        if mx < MOUSE_BORDER_LEFT or mx > MOUSE_BORDER_RIGHT:
+            PG.mouse.set_pos([HALF_WIDTH, HALF_HEIGHT])
+        shoot.rel = PG.mouse.get_rel()[0]
+        shoot.rel = max(-MOUSE_MAX_REL, min(MOUSE_MAX_REL, shoot.rel))
+        shoot.angle += shoot.rel * MOUSE_SENSITIVITY * shoot.game.delta_time
+
+    def update(shoot):
+        shoot.movement()
+        shoot.mouse_control()
+        shoot.recover_health()
+
+    @property
+    def pos(shoot):
+        return shoot.x, shoot.y
+
+    @property
+    def map_pos(shoot):
+        return int(shoot.x), int(shoot.y)
+
+class Map:
+    def __init__(shoot, game):
+        shoot.game = game
+        shoot.mini_map = mini_map
+        shoot.world_map = {}
+        shoot.rows = len(shoot.mini_map)
+        shoot.cols = len(shoot.mini_map[0])
+        shoot.get_map()
+
+    def get_map(shoot):
+        for j, row in enumerate(shoot.mini_map):
+            for i, value in enumerate(row):
+                if value:
+                    shoot.world_map[(i, j)] = value
+
+    def draw(shoot):
+        [PG.draw.rect(shoot.game.screen, 'darkgray', (pos[0] * 100, pos[1] * 100, 100, 100), 2)
+         for pos in shoot.world_map]
+class PathFinding:
+    def __init__(shoot, game):
+        shoot.game = game
+        shoot.map = game.map.mini_map
+        shoot.ways = [-1, 0], [0, -1], [1, 0], [0, 1], [-1, -1], [1, -1], [1, 1], [-1, 1]
+        shoot.graph = {}
+        shoot.get_graph()
+
+    def get_path(shoot, start, dest):
+        shoot.visited = shoot.bfs(start, dest, shoot.graph)
+        way = [dest]
+        step = shoot.visited.get(dest, start)
+
+        while step and step != start:
+            way.append(step)
+            step = shoot.visited[step]
+        return way[-1]
+
+    def bfs(shoot, start, goal, graph):
+        queue = deque([start])
+        visited = {start: None}
+
+        while queue:
+            cur_void = queue.popleft()
+            if cur_void == goal:
+                break
+            next_voids = graph[cur_void]
+
+            for next_void in next_voids:
+                if next_void not in visited and next_void not in shoot.game.object_handler.npc_positions:
+                    queue.append(next_void)
+                    visited[next_void] = cur_void
+        return visited
+
+    def get_next_voids(shoot, x, y):
+        return [(x + dx, y + dy) for dx, dy in shoot.ways if (x + dx, y + dy) not in shoot.game.map.world_map]
+
+    def get_graph(shoot):
+        for y, row in enumerate(shoot.map):
+            for x, col in enumerate(row):
+                if not col:
+                    shoot.graph[(x, y)] = shoot.graph.get((x, y), []) + shoot.get_next_voids(x, y)
+                    
+class RayCasting:
+    def __init__(shoot, game):
+        shoot.game = game
+        shoot.ray_casting_result = []
+        shoot.objects_to_render = []
+        shoot.textures = shoot.game.object_renderer.wall_textures
+
+    def get_objects_to_render(shoot):
+        shoot.objects_to_render = []
+        for ray, values in enumerate(shoot.ray_casting_result):
+            depth, proj_height, texture, offset = values
+
+            if proj_height < HEIGHT:
+                wall_column = shoot.textures[texture].subsurface(
+                    offset * (TEXTURE_SIZE - SCALE), 0, SCALE, TEXTURE_SIZE
+                )
+                wall_column = PG.transform.scale(wall_column, (SCALE, proj_height))
+                wall_pos = (ray * SCALE, HALF_HEIGHT - proj_height // 2)
+            else:
+                texture_height = TEXTURE_SIZE * HEIGHT / proj_height
+                wall_column = shoot.textures[texture].subsurface(
+                    offset * (TEXTURE_SIZE - SCALE), HALF_TEXTURE_SIZE - texture_height // 2,
+                    SCALE, texture_height
+                )
+                wall_column = PG.transform.scale(wall_column, (SCALE, HEIGHT))
+                wall_pos = (ray * SCALE, 0)
+
+            shoot.objects_to_render.append((depth, wall_column, wall_pos))
+
+    def ray_cast(shoot):
+        shoot.ray_casting_result = []
+        texture_vert, texture_hor = 1, 1
+        ox, oy = shoot.game.player.pos
+        x_map, y_map = shoot.game.player.map_pos
+
+        ray_inclination = shoot.game.player.angle - HALF_FOV + 0.0001
+        for ray in range(NUM_RAYS):
+            sin_a = math.sin(ray_inclination)
+            cos_a = math.cos(ray_inclination)
+
+            # horizontals
+            y_Horizon, dy = (y_map + 1, 1) if sin_a > 0 else (y_map - 1e-6, -1)
+
+            depth_Horizon = (y_Horizon - oy) / sin_a
+            x_Horizon = ox + depth_Horizon * cos_a
+
+            del_depth = dy / sin_a
+            dx = del_depth * cos_a
+
+            for i in range(MAX_DEPTH):
+                tile_Horizon = int(x_Horizon), int(y_Horizon)
+                if tile_Horizon in shoot.game.map.world_map:
+                    texture_hor = shoot.game.map.world_map[tile_Horizon]
+                    break
+                x_Horizon += dx
+                y_Horizon += dy
+                depth_Horizon += del_depth
+
+            # verticals
+            x_Vertic, dx = (x_map + 1, 1) if cos_a > 0 else (x_map - 1e-6, -1)
+
+            depth_Vertic = (x_Vertic - ox) / cos_a
+            y_Vertic = oy + depth_Vertic * sin_a
+
+            del_depth = dx / cos_a
+            dy = del_depth * sin_a
+
+            for i in range(MAX_DEPTH):
+                tile_Vertic = int(x_Vertic), int(y_Vertic)
+                if tile_Vertic in shoot.game.map.world_map:
+                    texture_vert = shoot.game.map.world_map[tile_Vertic]
+                    break
+                x_Vertic += dx
+                y_Vertic += dy
+                depth_Vertic += del_depth
+
+            # depth, texture offset
+            if depth_Vertic < depth_Horizon:
+                depth, texture = depth_Vertic, texture_vert
+                y_Vertic %= 1
+                offset = y_Vertic if cos_a > 0 else (1 - y_Vertic)
+            else:
+                depth, texture = depth_Horizon, texture_hor
+                x_Horizon %= 1
+                offset = (1 - x_Horizon) if sin_a > 0 else x_Horizon
+
+            # remove fishbowl effect
+            depth *= math.cos(shoot.game.player.angle - ray_inclination)
+
+            # projection
+            proj_height = SCREEN_DIST / (depth + 0.0001)
+
+            # ray casting result
+            shoot.ray_casting_result.append((depth, proj_height, texture, offset))
+
+            ray_inclination += DELTA_ANGLE
+
+    def update(shoot):
+            shoot.ray_cast()
+            shoot.get_objects_to_render()
+class SpriteObject:
+    def __init__(shoot, game, path='resources/sprites/static_sprites/candlebra.png',
+                 pos=(10.5, 3.5), scale=0.7, shift=0.27):
+        shoot.game = game
+        shoot.player = game.player
+        shoot.x, shoot.y = pos
+        shoot.image = PG.image.load(path).convert_alpha()
+        shoot.IMAGE_WIDTH = shoot.image.get_width()
+        shoot.IMAGE_HALF_WIDTH = shoot.image.get_width() // 2
+        shoot.IMAGE_RATIO = shoot.IMAGE_WIDTH / shoot.image.get_height()
+        shoot.dx, shoot.dy, shoot.theta, shoot.screen_x, shoot.dist, shoot.norm_dist = 0, 0, 0, 0, 1, 1
+        shoot.sprite_half_width = 0
+        shoot.SPRITE_SCALE = scale
+        shoot.SPRITE_HEIGHT_SHIFT = shift
+
+    def get_sprite_projection(shoot):
+        proj = SCREEN_DIST / shoot.norm_dist * shoot.SPRITE_SCALE
+        proj_width, proj_height = proj * shoot.IMAGE_RATIO, proj
+
+        image = PG.transform.scale(shoot.image, (proj_width, proj_height))
+
+        shoot.sprite_half_width = proj_width // 2
+        height_shift = proj_height * shoot.SPRITE_HEIGHT_SHIFT
+        pos = shoot.screen_x - shoot.sprite_half_width, HALF_HEIGHT - proj_height // 2 + height_shift
+
+        shoot.game.raycasting.objects_to_render.append((shoot.norm_dist, image, pos))
+
+    def get_sprite(shoot):
+        dx = shoot.x - shoot.player.x
+        dy = shoot.y - shoot.player.y
+        shoot.dx, shoot.dy = dx, dy
+        shoot.theta = math.atan2(dy, dx)
+
+        delta = shoot.theta - shoot.player.angle
+        if (dx > 0 and shoot.player.angle > math.pi) or (dx < 0 and dy < 0):
+            delta += math.tau
+
+        delta_rays = delta / DELTA_ANGLE
+        shoot.screen_x = (HALF_NUM_RAYS + delta_rays) * SCALE
+
+        shoot.dist = math.hypot(dx, dy)
+        shoot.norm_dist = shoot.dist * math.cos(delta)
+        if -shoot.IMAGE_HALF_WIDTH < shoot.screen_x < (WIDTH + shoot.IMAGE_HALF_WIDTH) and shoot.norm_dist > 0.5:
+            shoot.get_sprite_projection()
+
+    def update(shoot):
+        shoot.get_sprite()
+
+class AnimatedSprite(SpriteObject):
+    def __init__(shoot, game, path='resources/sprites/animated_sprites/green_light/0.png',
+                 pos=(11.5, 3.5), scale=0.8, shift=0.16, animation_time=120):
+        super().__init__(game, path, pos, scale, shift)
+        shoot.animation_time = animation_time
+        shoot.path = path.rsplit('/', 1)[0]
+        shoot.images = shoot.get_images(shoot.path)
+        shoot.animation_time_previous = PG.time.get_ticks()
+        shoot.animation_trigger = False
+
+    def update(shoot):
+        super().update()
+        shoot.check_animation_time()
+        shoot.animate(shoot.images)
+
+    def animate(shoot, images):
+        if shoot.animation_trigger:
+            images.rotate(-1)
+            shoot.image = images[0]
+
+    def check_animation_time(shoot):
+        shoot.animation_trigger = False
+        time_now = PG.time.get_ticks()
+        if time_now - shoot.animation_time_previous > shoot.animation_time:
+            shoot.animation_time_previous = time_now
+            shoot.animation_trigger = True
+
+    def get_images(shoot, path):
+        images = deque()
+        for file_name in sorted(os.listdir(path)):
+            if os.path.isfile(os.path.join(path, file_name)):
+                pict = PG.image.load(path + '/' + file_name).convert_alpha()
+                images.append(pict)
+        return images
+class NPC(AnimatedSprite):
+    def __init__(shoot, game, path='resources/sprites/npc/soldier/0.png', pos=(10.5, 5.5),
+                 scale=0.6, shift=0.38, animation_time=180):
+        super().__init__(game, path, pos, scale, shift, animation_time)
+        shoot.attack_images = shoot.get_images(shoot.path + '/attack')
+        shoot.death_images = shoot.get_images(shoot.path + '/death')
+        shoot.idle_images = shoot.get_images(shoot.path + '/idle')
+        shoot.pain_images = shoot.get_images(shoot.path + '/pain')
+        shoot.walk_images = shoot.get_images(shoot.path + '/walk')
+
+        shoot.attack_dist = randint(3, 6)
+        shoot.speed = 0.03
+        shoot.size = 20
+        shoot.health = 100
+        shoot.attack_damage = 10
+        shoot.accuracy = 0.15
+        shoot.alive = True
+        shoot.pain = False
+        shoot.ray_cast_value = False
+        shoot.frame_counter = 0
+        shoot.player_search_trigger = False
+
+    def update(shoot):
+        shoot.check_animation_time()
+        shoot.get_sprite()
+        shoot.run_logic()
+        # shoot.draw_ray_cast()
+
+    def check_wall(shoot, x, y):
+        return (x, y) not in shoot.game.map.world_map
+
+    def check_wall_collision(shoot, dx, dy):
+        if shoot.check_wall(int(shoot.x + dx * shoot.size), int(shoot.y)):
+            shoot.x += dx
+        if shoot.check_wall(int(shoot.x), int(shoot.y + dy * shoot.size)):
+            shoot.y += dy
+
+    def movement(shoot):
+        next_pos = shoot.game.pathfinding.get_path(shoot.map_pos, shoot.game.player.map_pos)
+        next_x, next_y = next_pos
+
+        # PG.draw.rect(shoot.game.screen, 'blue', (100 * next_x, 100 * next_y, 100, 100))
+        if next_pos not in shoot.game.object_handler.npc_positions:
+            inc = math.atan2(next_y + 0.5 - shoot.y, next_x + 0.5 - shoot.x)
+            dx = math.cos(inc) * shoot.speed
+            dy = math.sin(inc) * shoot.speed
+            shoot.check_wall_collision(dx, dy)
+
+    def attack(shoot):
+        if shoot.animation_trigger:
+            shoot.game.sound.npc_shot.play()
+            if random() < shoot.accuracy:
+                shoot.game.player.get_damage(shoot.attack_damage)
+
+    def animate_death(shoot):
+        if not shoot.alive:
+            if shoot.game.global_trigger and shoot.frame_counter < len(shoot.death_images) - 1:
+                shoot.death_images.rotate(-1)
+                shoot.image = shoot.death_images[0]
+                shoot.frame_counter += 1
+
+    def animate_pain(shoot):
+        shoot.animate(shoot.pain_images)
+        if shoot.animation_trigger:
+            shoot.pain = False
+
+    def check_hit_in_npc(shoot):
+        if shoot.ray_cast_value and shoot.game.player.shot:
+            if HALF_WIDTH - shoot.sprite_half_width < shoot.screen_x < HALF_WIDTH + shoot.sprite_half_width:
+                shoot.game.sound.npc_pain.play()
+                shoot.game.player.shot = False
+                shoot.pain = True
+                shoot.health -= shoot.game.gun.damage
+                shoot.check_health()
+
+    def check_health(shoot):
+        if shoot.health < 1:
+            shoot.alive = False
+            shoot.game.sound.npc_death.play()
+
+    def run_logic(shoot):
+        if shoot.alive:
+            shoot.ray_cast_value = shoot.ray_cast_player_npc()
+            shoot.check_hit_in_npc()
+
+            if shoot.pain:
+                shoot.animate_pain()
+
+            elif shoot.ray_cast_value:
+                shoot.player_search_trigger = True
+
+                if shoot.dist < shoot.attack_dist:
+                    shoot.animate(shoot.attack_images)
+                    shoot.attack()
+                else:
+                    shoot.animate(shoot.walk_images)
+                    shoot.movement()
+
+            elif shoot.player_search_trigger:
+                shoot.animate(shoot.walk_images)
+                shoot.movement()
+
+            else:
+                shoot.animate(shoot.idle_images)
+        else:
+            shoot.animate_death()
+
+    @property
+    def map_pos(shoot):
+        return int(shoot.x), int(shoot.y)
+
+    def ray_cast_player_npc(shoot):
+        if shoot.game.player.map_pos == shoot.map_pos:
+            return True
+
+        wall_dist_v, wall_dist_h = 0, 0
+        player_dist_v, player_dist_h = 0, 0
+
+        ox, oy = shoot.game.player.pos
+        x_map, y_map = shoot.game.player.map_pos
+
+        ray_angle = shoot.theta
+
+        sin_angle = math.sin(ray_angle)
+        cos_angle = math.cos(ray_angle)
+
+        # horizontals
+        y_Horizon, dy = (y_map + 1, 1) if sin_angle > 0 else (y_map - 1e-6, -1)
+
+        depth_Horizon = (y_Horizon - oy) / sin_angle
+        x_Horizon = ox + depth_Horizon * cos_angle
+
+        delta_depth = dy / sin_angle
+        dx = delta_depth * cos_angle
+
+        for i in range(MAX_DEPTH):
+            tile_Horizon = int(x_Horizon), int(y_Horizon)
+            if tile_Horizon == shoot.map_pos:
+                player_dist_h = depth_Horizon
+                break
+            if tile_Horizon in shoot.game.map.world_map:
+                wall_dist_h = depth_Horizon
+                break
+            x_Horizon += dx
+            y_Horizon += dy
+            depth_Horizon += delta_depth
+
+        # verticals
+        x_Vertic, dx = (x_map + 1, 1) if cos_angle > 0 else (x_map - 1e-6, -1)
+
+        depth_Vertic = (x_Vertic - ox) / cos_angle
+        y_Vertic = oy + depth_Vertic * sin_angle
+
+        delta_depth = dx / cos_angle
+        dy = delta_depth * sin_angle
+
+        for i in range(MAX_DEPTH):
+            tile_Vertic = int(x_Vertic), int(y_Vertic)
+            if tile_Vertic == shoot.map_pos:
+                player_dist_v = depth_Vertic
+                break
+            if tile_Vertic in shoot.game.map.world_map:
+                wall_dist_v = depth_Vertic
+                break
+            x_Vertic += dx
+            y_Vertic += dy
+            depth_Vertic += delta_depth
+
+        player_dist = max(player_dist_v, player_dist_h)
+        wall_dist = max(wall_dist_v, wall_dist_h)
+
+        if 0 < player_dist < wall_dist or not wall_dist:
+            return True
+        return False
+
+    def draw_ray_cast(shoot):
+        PG.draw.circle(shoot.game.screen, 'red', (100 * shoot.x, 100 * shoot.y), 15)
+        if shoot.ray_cast_player_npc():
+            PG.draw.line(shoot.game.screen, 'orange', (100 * shoot.game.player.x, 100 * shoot.game.player.y),
+                         (100 * shoot.x, 100 * shoot.y), 2)
+            
+class SoldierNPC(NPC):
+    def __init__(shoot, game, path='resources/sprites/npc/soldier/0.png', pos=(10.5, 5.5),
+                 scale=0.6, shift=0.38, animation_time=180):
+        super().__init__(game, path, pos, scale, shift, animation_time)
+
+class CacoDemonNPC(NPC):
+    def __init__(shoot, game, path='resources/sprites/npc/caco_demon/0.png', pos=(10.5, 6.5),
+                 scale=0.7, shift=0.27, animation_time=250):
+        super().__init__(game, path, pos, scale, shift, animation_time)
+        shoot.attack_dist = 1.0
+        shoot.health = 150
+        shoot.attack_damage = 25
+        shoot.speed = 0.05
+        shoot.accuracy = 0.35
+
+class CyberDemonNPC(NPC):
+    def __init__(shoot, game, path='resources/sprites/npc/cyber_demon/0.png', pos=(11.5, 6.0),
+                 scale=1.0, shift=0.04, animation_time=210):
+        super().__init__(game, path, pos, scale, shift, animation_time)
+        shoot.attack_dist = 6
+        shoot.health = 350
+        shoot.attack_damage = 15
+        shoot.speed = 0.055
+        shoot.accuracy = 0.25
+        
+class Sound():
+
+    def __init__(shoot, game):
+
+        shoot.game = game
+
+        PG.mixer.init()
+
+        shoot.path = 'resources/sound/'
+
+        shoot.shotgun = PG.mixer.Sound(shoot.path + 'shotgun.wav')
+
+        shoot.npc_pain = PG.mixer.Sound(shoot.path + 'npc_pain.wav')
+
+        shoot.npc_death = PG.mixer.Sound(shoot.path + 'npc_death.wav')
+
+        shoot.npc_shot = PG.mixer.Sound(shoot.path + 'npc_attack.wav')
+
+        shoot.npc_shot.set_volume(0.2)
+
+        shoot.player_pain = PG.mixer.Sound(shoot.path + 'player_pain.wav')
+
+        shoot.theme = PG.mixer.music.load(shoot.path + 'theme.mp3')
+        
+class Weapon(AnimatedSprite):
+
+    def __init__(shoot, game, path='resources/sprites/weapon/shotgun/0.png', scale=0.4, animation_time=90):
+
+        super().__init__(game=game, path=path, scale=scale, animation_time=animation_time)
+
+        shoot.images = deque(
+
+            [PG.transform.smoothscale(img, (shoot.image.get_width() * scale, shoot.image.get_height() * scale))
+
+             for img in shoot.images])
+
+        shoot.weapon_pos = (HALF_WIDTH - shoot.images[0].get_width() // 2, HEIGHT - shoot.images[0].get_height())
+
+        shoot.reloading = False
+
+        shoot.num_images = len(shoot.images)
+
+        shoot.frame_counter = 0
+
+        shoot.damage = 50
+
+    def animate_shot(shoot):
+
+        if shoot.reloading:
+
+            shoot.game.player.shot = False
+
+            if shoot.animation_trigger:
+
+                shoot.images.rotate(-1)
+
+                shoot.image = shoot.images[0]
+
+                shoot.frame_counter += 1
+
+                if shoot.frame_counter == shoot.num_images:
+
+                    shoot.reloading = False
+
+                    shoot.frame_counter = 0
+
+    def draw(shoot):
+
+        shoot.game.screen.blit(shoot.images[0], shoot.weapon_pos)
+
+    def update(shoot):
+
+        shoot.check_animation_time()
+
+        shoot.animate_shot()        
+
+if __name__ == '__main__':
+    game = Game()
+    game.run()
